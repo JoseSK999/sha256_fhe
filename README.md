@@ -10,3 +10,4 @@ or
 ```
 tfhe = { version = "0.1.12", features = ["boolean", "aarch64-unix"] }
 ```
+depending on your architecture.
