@@ -1,7 +1,7 @@
 // This module contains all the operations used in the sha256 function, implemented purely on
-// boolean circuits. We use multi-threading to speed up the computation, implemented in the
-// "and", "xor" and "not" functions, used almost everywhere. Specifically we have set the number of
-// threads to 8, although it can be changed or even replaced by more complex concurrency techniques.
+// boolean circuits. We use multi-threading to speed up the computation, inside the "and", "xor" 
+// and "not" functions, used almost everywhere. Specifically we have set the number of threads
+// to 8, although it can be changed or even replaced by more complex concurrency techniques.
 
 use std::sync::Arc;
 use std::thread;
