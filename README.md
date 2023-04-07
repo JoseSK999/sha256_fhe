@@ -1,6 +1,6 @@
 # sha256_fhe
 
-This repo contains the implementation of a homomorphic sha256 function. In other words, a function that computes a sha256 hash over encrypted data such that H(E(Data)) = E(H(Data)).
+This repo contains the implementation of a homomorphic sha256 function. In other words, a function that computes a sha256 hash over encrypted data such that H(E(Data)) = E(H(Data)). Hence the server that does the computation doesn't know at all the input data nor the resulting hash.
 
 Make sure to add the correct dependency to the Cargo.toml file depending on your computer architecture:
 ```
