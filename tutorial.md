@@ -26,11 +26,22 @@ Where the numbers on the top represent the length of the padded input at each po
 
 #### Operations and functions
 
-We also find the operations that we will be using as building blocks for functions inside the sha256 computation. These are bitwise AND, XOR, NOT, addition modulo 2^32 and the Rotate Right (ROTR) and Right Shift (SHR) operations, all working with 32-bit words.
+We also find the operations that we will use as building blocks for functions inside the sha256 computation. These are bitwise AND, XOR, NOT, addition modulo 2^32 and the Rotate Right (ROTR) and Shift Right (SHR) operations, all working with 32-bit words and producing a new word.
 
 Note that ROTR and SHR can be evaluated by changing the index of each individual bit of the word, even if each bit is encrypted. Note also that the other bitwise operations can be computed homomorphically and that addition can be broken down into homomorphic bitwise operations.
 
 We then combine the operations inside the sigma (with 4 variations), ch and maj functions. At the end of the day, when we change the sha256 to be computed homomorphically, we will mainly change the isolated code of the operations used within these functions.
+
+Here is the definition of each function:
+```
+Ch(x, y, z) = (x AND y) XOR ((NOT x) AND z)
+Maj(x, y, z) = (x AND y) XOR (x AND z) XOR (y AND z)
+
+Σ0(x) = ROTR-2(x) XOR ROTR-13(x) XOR ROTR-22(x)
+Σ1(x) = ROTR-6(x) XOR ROTR-11(x) XOR ROTR-25(x)
+σ0(x) = ROTR-7(x) XOR ROTR-18(x) XOR SHR-3(x)
+σ1(x) = ROTR-17(x) XOR ROTR-19(x) XOR SHR-10(x)
+```
 
 #### Sha256 computation
 
@@ -41,7 +52,7 @@ Here is how this function looks like using arrays of 32 bools to represent words
 ```rust
 fn sha256(padded_input: Vec<bool>) -> [bool; 256] {
 
-    // Initialize hash values
+    // Initialize hash values with constant values
     let mut hash: [[bool; 32]; 8] = [
         hex_to_bools(0x6a09e667), hex_to_bools(0xbb67ae85),
         hex_to_bools(0x3c6ef372), hex_to_bools(0xa54ff53a),
@@ -73,7 +84,7 @@ fn sha256(padded_input: Vec<bool>) -> [bool; 256] {
         let mut g = hash[6];
         let mut h = hash[7];
 
-        // Compression loop
+        // Compression loop, each iteration uses a specific constant from K
         for i in 0..64 {
             let temp1 = add(add(add(add(h, ch(&e, &f, &g)), w[i]), hex_to_bools(K[i])), sigma_upper_case_1(&e));
             let temp2 = add(sigma_upper_case_0(&a), maj(&a, &b, &c));
@@ -105,3 +116,34 @@ fn sha256(padded_input: Vec<bool>) -> [bool; 256] {
     output
 }
 ```
+
+## Making it homomorphic
+
+The key idea is that we can replace each bit of the input data with a Fully Homomorphic Encryption of the same bit value, and change the operations to work with encrypted bool values. The client can pad the data, encrypt it, and send it to the server who will homomorphically compute the sha256 function. Finally the client will receive the output and will be able to decrypt it with her private key.
+
+We will need to change the function signatures and deal with the borrowing rules of the Ciphertext type, which represents an encrypted bit, but the structure of the main sha256 function remains the same. The part of the code that requires more consideration is the implementation of the operations.
+
+Since the homomorphic boolean operations are really expensive, we have to minimize their usage and maximize parallelization. Let's take a look at each sha256 operation.
+
+#### Rotate Right and Shift Right
+
+As we have highlighted, these two operations can be evaluated by changing the position of each encrypted bit in the word, thereby requiring 0 homomorphic operations. Here is our implementation:
+
+```rust
+fn rotate_right(x: &[Ciphertext; 32], n: usize, sk: &ServerKey) -> [Ciphertext; 32] {
+    let mut result = trivial_bools(&[false; 32], sk);
+    for i in 0..32 {
+        result[(i + n) % 32] = x[i].clone();
+    }
+    result
+}
+
+fn shift_right(x: &[Ciphertext; 32], n: usize, sk: &ServerKey) -> [Ciphertext; 32] {
+    let mut result = trivial_bools(&[false; 32], sk);
+    for i in 0..(32 - n) {
+        result[i + n] = x[i].clone();
+    }
+    result
+}
+```
+We see a function called ``trivial_bools`` that we will be using along our implementation to initialize an array of 32 trivial encryptions. This is because we cannot copy the same Ciphertext for each position. We will also use it in order to transform the constant values into Ciphertexts, such that we can operate with them.
