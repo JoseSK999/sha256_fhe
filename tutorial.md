@@ -152,7 +152,7 @@ We see a function called ``trivial_bools`` that we will use along our implementa
 
 We will now use the ```xor```, ```and``` and ```not``` methods provided by the tfhe library to evaluate each boolean operation homomorphically. It's important to note that, since we will operate bitwise, we can parallelize the homomorphic computations. In other words, we can homomorphically XOR the bits at index 0 of two words using a thread, while XORing the bits at index 1 using another thread, and so on. This means we could compute these bitwise operations using up to 32 concurrent threads (since we work with 32 bit words).
 
-In our specific implementation we have actually used 8 threads (since computers rarelly support 32 threads). However we can change the parameter as we will soon demonstrate to change the number of threads, or perhaps replace them with more advanced concurrency techniques.
+In our specific implementation we have actually used 8 threads which modern computers usually support. However we can change the parameter as we will soon demonstrate to change the number of threads, or perhaps replace them with more advanced concurrency techniques.
 
 Here is our implementation of the bitwise homomorphic XOR operation, where each thread computes a partial result of 4 bits (8 threads * 4 bits = 32 bits). When all the partial results have been computed we combine them into the resulting 32 Ciphertext array. The other two bitwise operations are computed in the same way, but NOT only takes a word as argument.
 
@@ -203,3 +203,18 @@ We see that ```partial_result``` is initialized with 4 Ciphertexts and we comput
 
 #### Addition modulo 2^32
 
+This is perhaps the trickiest operation to efficiently implement in a homomorphic fashion. A naive implementation could use the Ripple Carry Adder algorithm, which is straightforward but cannot be parallelized because each step depends on the previous one.
+
+A better choice would be the Carry Lookahead Adder, which allows us to use the previous AND and XOR bitwise operations. This way we are abstracting away the parallel processing of the addition operation. Here is our implementation, which is around 50% faster than the naive Ripple Carry Adder.
+
+```rust
+pub fn add(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
+    let propagate = xor(a, b, sk); // Parallelized bitwise XOR
+    let generate = and(a, b, sk); // Parallelized bitwise AND
+
+    let carry = compute_carry(&propagate, &generate, sk);
+    let sum = xor(&propagate, &carry, sk); // Parallelized bitwise XOR
+
+    sum
+}
+```
