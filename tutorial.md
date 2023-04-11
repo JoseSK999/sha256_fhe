@@ -28,7 +28,7 @@ Where the numbers on the top represent the length of the padded input at each po
 
 We also find the operations that we will use as building blocks for functions inside the sha256 computation. These are bitwise AND, XOR, NOT, addition modulo 2^32 and the Rotate Right (ROTR) and Shift Right (SHR) operations, all working with 32-bit words and producing a new word.
 
-Note that ROTR and SHR can be evaluated by changing the index of each individual bit of the word, even if each bit is encrypted. Note also that the other bitwise operations can be computed homomorphically and that addition can be broken down into homomorphic bitwise operations.
+Note that ROTR and SHR can be evaluated by changing the index of each individual bit of the word, even if each bit is encrypted. Note also that the other boolean operations can be computed homomorphically and that addition can be broken down into homomorphic bitwise operations.
 
 We then combine the operations inside the sigma (with 4 variations), ch and maj functions. At the end of the day, when we change the sha256 to be computed homomorphically, we will mainly change the isolated code of the operations used within these functions.
 
@@ -146,4 +146,60 @@ fn shift_right(x: &[Ciphertext; 32], n: usize, sk: &ServerKey) -> [Ciphertext; 3
     result
 }
 ```
-We see a function called ``trivial_bools`` that we will be using along our implementation to initialize an array of 32 trivial encryptions. This is because we cannot copy the same Ciphertext for each position. We will also use it in order to transform the constant values into Ciphertexts, such that we can operate with them.
+We see a function called ``trivial_bools`` that we will use along our implementation to initialize an array of 32 Ciphertexts. This is because we cannot copy the same Ciphertext for each position of the array as we do with simple bools, so we create 32 different trivial encryptions. We will also use this function in order to trivially encrypt constant values such that we can operate homomorphically with them.
+
+#### Bitwise XOR, AND, NOT
+
+We will now use the ```xor```, ```and``` and ```not``` methods provided by the tfhe library to evaluate each boolean operation homomorphically. It's important to note that, since we will operate bitwise, we can parallelize the homomorphic computations. In other words, we can homomorphically XOR the bits at index 0 of two words using a thread, while XORing the bits at index 1 using another thread, and so on. This means we could compute these bitwise operations using up to 32 concurrent threads (since we work with 32 bit words).
+
+In our specific implementation we have actually used 8 threads (since computers rarelly support 32 threads). However we can change the parameter as we will soon demonstrate to change the number of threads, or perhaps replace them with more advanced concurrency techniques.
+
+Here is our implementation of the bitwise homomorphic XOR operation, where each thread computes a partial result of 4 bits (8 threads * 4 bits = 32 bits). When all the partial results have been computed we combine them into the resulting 32 Ciphertext array. The other two bitwise operations are computed in the same way, but NOT only takes a word as argument.
+
+```rust
+fn xor(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
+    let mut result = trivial_bools(&[false; 32], sk);
+    let mut handles = vec![];
+
+    let a = Arc::new(a.clone());
+    let b = Arc::new(b.clone());
+    let sk = Arc::new(sk.clone());
+
+    for t in 0..8 { // 8 threads
+        let a = Arc::clone(&a);
+        let b = Arc::clone(&b);
+        let sk = Arc::clone(&sk);
+
+        let handle = thread::spawn(move || {
+            let mut partial_result = vec![
+                sk.trivial_encrypt(false), sk.trivial_encrypt(false),
+                sk.trivial_encrypt(false), sk.trivial_encrypt(false), // Length of partial result = 4
+            ];
+
+            let start = t * 4;
+            let end = start + 4;
+
+            for i in start..end {
+                let idx = i - start;
+                partial_result[idx] = sk.xor(&a[i], &b[i]); // homomorphic boolean XOR
+            }
+            partial_result
+        });
+
+        handles.push(handle);
+    }
+
+    for (i, handle) in handles.into_iter().enumerate() {
+        let partial_result = handle.join().unwrap();
+        let start = i * 4;
+        let end = start + 4;
+
+        result[start..end].clone_from_slice(&partial_result);
+    }
+    result
+}
+```
+We see that ```partial_result``` is initialized with 4 Ciphertexts and we compute ```start``` multiplying a variable by 4 and ```end``` by adding 4. To use 16 threads, for instance, we would have to use ```for t in 0..16```, change the length of the partial result to 2 (16 * 2 = 32) and also compute ```start``` and ```end``` using 2. That's all!
+
+#### Addition modulo 2^32
+
