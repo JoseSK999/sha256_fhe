@@ -197,7 +197,7 @@ fn xor(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertex
     result
 }
 ```
-Note that ```partial_result``` is initialized with 4 Ciphertexts and we compute ```start``` multiplying a variable by 4 and ```end``` by adding 4. To use 16 threads, for instance, we would have to use ```for t in 0..16```, change the length of the partial result to 2 (16 * 2 = 32) and also compute ```start``` and ```end``` using 2. And that's all.
+Note that ```partial_result``` is initialized with 4 Ciphertexts and that we compute ```start``` multiplying a variable by 4 and ```end``` by adding 4. So if for instance we want to use 16 threads, we will have to run the first for loop 16 times, set the length of ```partial_result``` to 2 (16 * 2 = 32) and also compute ```start``` and ```end``` using 2. And that's it.
 
 #### Addition modulo 2^32
 
@@ -217,5 +217,25 @@ pub fn add(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphe
 }
 ```
 
+With all these sha256 operations working homomorphically, our functions will be homomomorphic as well and the whole sha256 function too (after adapting the code to work with the Ciphertext type).
+
 ## Usage of sha256_fhe
 
+So far we have only looked at each part of our homomorphic implementation, but how does it work at a high level? The usage of sha256_fhe would be the following:
+
+KEY GENERATION
+1. Client generates his private key (client key) and the server key.
+
+PADDING AND ENCRYPTION
+2. Client pads the data he wants to compute the sha256 on.
+3. Client encrypts each bit of the padded data with his private key.
+4. Client sends the server key and the encrypted padded data to the server.
+
+HOMOMORPHIC COMPUTATION
+5. Server computes the homomorphic sha256 function.
+6. Server sends the output to the client.
+
+DECRYPTION
+7. Finally client decrypts each bit of the output to get the hash value.
+
+We can see that the padding part is executed on the client side. In this way the server will not even learn the exact size of the input data. Another option would be to implement the padding function to receive the encrypted data and pad it with trivial encryptions.
