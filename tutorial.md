@@ -221,21 +221,21 @@ With all these sha256 operations working homomorphically, our functions will be 
 
 ## Usage of sha256_fhe
 
-So far we have only looked at each part of our homomorphic implementation, but how does it work at a high level? The usage of sha256_fhe would be the following:
+So far we have only looked at each part of our homomorphic implementation, but how does it work at a high level? The usage of sha256_fhe would look like this:
 
 KEY GENERATION
-1. Client generates his private key (client key) and the server key.
+* Client generates his private key (client key) and the server key.
 
 PADDING AND ENCRYPTION
-2. Client pads the data he wants to compute the sha256 on.
-3. Client encrypts each bit of the padded data with his private key.
-4. Client sends the server key and the encrypted padded data to the server.
+* Client pads the data he wants to compute the sha256 on.
+* Client encrypts each bit of the padded data with his private key.
+* Client sends the server key and the encrypted padded data to the server.
 
 HOMOMORPHIC COMPUTATION
-5. Server computes the homomorphic sha256 function.
-6. Server sends the output to the client.
+* Server computes the homomorphic sha256 function.
+* Server sends the output to the client.
 
 DECRYPTION
-7. Finally client decrypts each bit of the output to get the hash value.
+* Finally client decrypts each bit of the output to get the hash value.
 
 We can see that the padding part is executed on the client side. In this way the server will not even learn the exact size of the input data. Another option would be to implement the padding function to receive the encrypted data and pad it with trivial encryptions.
