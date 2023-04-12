@@ -119,9 +119,9 @@ fn sha256(padded_input: Vec<bool>) -> [bool; 256] {
 
 ## Making it homomorphic
 
-The key idea here is that we can replace each bit of the input data with a Fully Homomorphic Encryption of the same bit value, and operate over the encrypted values using homomorphic operations. To achieve this we need to change the function signatures and deal with the borrowing rules of the Ciphertext type, which represents an encrypted bit, but the structure of the sha256 function remains the same. The part of the code that requires more consideration is the implementation of the sha256 operations, since they will use homomorphic boolean operations internally.
+The key idea is that we can replace each bit of ```padded_input``` with a Fully Homomorphic Encryption of the same bit value, and operate over the encrypted values using homomorphic operations. To achieve this we need to change the function signatures and deal with the borrowing rules of the Ciphertext type (which represents an encrypted bit) but the structure of the sha256 function remains the same. The part of the code that requires more consideration is the implementation of the sha256 operations, since they will use homomorphic boolean operations internally.
 
-Since the homomorphic boolean operations are really expensive, we have to remove unnecessary homomorphic operations and maximize parallelization such that we can use multithreading to speed up the computation. Let's take a look at each sha256 operation.
+Since homomorphic operations are really expensive, we have to remove their unnecessary use and maximize parallelization in order to speed up the program. Let's take a look at each sha256 operation.
 
 #### Rotate Right and Shift Right
 
@@ -217,25 +217,39 @@ pub fn add(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphe
 }
 ```
 
-With all these sha256 operations working homomorphically, our functions will be homomomorphic as well and the whole sha256 function too (after adapting the code to work with the Ciphertext type).
+With all these sha256 operations working homomorphically, our functions will be homomomorphic as well along with the whole sha256 function (after adapting the code to work with the Ciphertext type).
 
-## Usage of sha256_fhe
+## How to use sha256_fhe
 
-So far we have only looked at each part of our homomorphic implementation, but how does it work at a high level? The usage of sha256_fhe would look like this:
+At a high level, a correct use of sha256_fhe would look like this, given the implementation of ```encrypt_bools``` and ```decrypt_bools```:
+```rust
+fn main() {
+    let (ck, sk) = gen_keys();
 
-KEY GENERATION
-* Client generates his private key (client key) and the server key.
+    // CLIENT PADS DATA AND ENCRYPTS IT
 
-PADDING AND ENCRYPTION
-* Client pads the data he wants to compute the sha256 on.
-* Client encrypts each bit of the padded data with his private key.
-* Client sends the server key and the encrypted padded data to the server.
+    let padded_input = pad_sha256_input("hello world");
+    let encrypted_input = encrypt_bools(&padded_input, &ck);
 
-HOMOMORPHIC COMPUTATION
-* Server computes the homomorphic sha256 function.
-* Server sends the output to the client.
+    // SERVER COMPUTES OVER THE ENCRYPTED PADDED DATA
 
-DECRYPTION
-* Finally client decrypts each bit of the output to get the hash value.
+    let encrypted_output = sha256_fhe(encrypted_input, &sk);
 
-We can see that the padding part is executed on the client side. In this way the server will not even learn the exact size of the input data. Another option would be to implement the padding function to receive the encrypted data and pad it with trivial encryptions.
+    // CLIENT DECRYPTS THE OUTPUT
+
+    let output = decrypt_bools(&encrypted_output, &ck);
+    let outhex = bools_to_hex(output);
+
+    println!("{}", outhex);
+}
+```
+
+We can see that padding is executed on the client side. This has the advantage of hiding the exact length of the input to the server, who already doesn't know anything about the contents of it but may extract information from the length. 
+
+Another option would be to perform padding on the server side. The padding function would receive the encrypted input and pad it with trivial bit encryptions. We could then integrate the padding function inside the ```sha256_fhe``` function computed by the server.
+
+## Future improvements
+
+We didn't mention the ```compute_carry``` function that we use in the implementation of the Carry Lookahead Adder. This function computes the carry signal in a sequential way. Specifically it performs 62 sequential homomorphic operations, which as we know makes things much slower. Ideally we could implement an algorithm that reduces the sequential dependencies.
+
+There is also room for improvement by reducing the number of deep copies, although the performance improvement we would get is second or third order compared to the performance gain we get by parallelizing ```compute_carry```.
