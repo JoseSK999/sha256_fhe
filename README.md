@@ -9,3 +9,4 @@ tfhe = { version = "0.1.12", features = ["boolean", "x86_64-unix"] }
 ```
 tfhe = { version = "0.1.12", features = ["boolean", "aarch64-unix"] }
 ```
+For a detailed explanation of our homomorphic sha256 implementation you can read this [tutorial](https://github.com/JoseSK999/sha256_fhe/blob/main/tutorial.md).
