@@ -1,31 +1,68 @@
-// This module contains all the operations used in the sha256 function, implemented purely on
-// boolean circuits. We use multi-threading to speed up the computation inside the "and", "xor" 
-// and "not" functions, used almost everywhere. Specifically we have set the number of threads
-// to 8, although it can be changed or even replaced by more complex concurrency techniques.
+// This module contains all the operations and functions used in the sha256 function, implemented with homomorphic boolean
+// operations. We use multi-threading to speed up operations, specifically in the "and", "xor", "mux" bitwise operations,
+// used as building block for the rest of functions, and in the Ladner Fischer carry signal computation.
 
-use std::sync::Arc;
-use std::thread;
+use rayon::prelude::*;
 use tfhe::boolean::prelude::{BinaryBooleanGates, Ciphertext, ServerKey};
 
-// Carry Lookahead adder (modulo 2^32)
-// 3 batches of 32 parallelized bool ops (96) + 62 sequential bool ops
+// Carry Lookahead adder modulo 2^32
+// 3 batches of 32 parallelized bool ops + parallelized carry signal computation
 pub fn add(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
     let propagate = xor(a, b, sk);
     let generate = and(a, b, sk);
 
-    let carry = compute_carry(&propagate, &generate, sk);
+    let carry = ladner_fischer_carry(&propagate, &generate, sk);
     let sum = xor(&propagate, &carry, sk);
 
     sum
 }
 
-// This function could be optimized with a parallel prefix algorithm or similar
-fn compute_carry(propagate: &[Ciphertext; 32], generate: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
-    let mut carry = trivial_bools(&[false; 32], sk);
-    carry[31] = sk.trivial_encrypt(false);
+// Implementation of the Ladner Fischer parallel prefix algorithm, optimized with grey cells
+// Each of the 5 stages performs 16 fundamental carry operations in parallel
+fn ladner_fischer_carry(propagate: &[Ciphertext; 32], generate: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
+    let mut propagate = propagate.clone();
+    let mut generate = generate.clone();
 
-    for i in (0..31).rev() {
-        carry[i] = sk.or(&generate[i + 1], &sk.and(&propagate[i + 1], &carry[i + 1]));
+    for d in 0..5 {
+        let stride = 1 << d;
+
+        let indices: Vec<(usize, usize)> = (0..32 - stride)
+            .rev()
+            .step_by(2 * stride)
+            .flat_map(|i| (0..stride).map(move |count| (i, count)))
+            .collect();
+
+        let updates: Vec<(usize, Ciphertext, Ciphertext)> = indices
+            .into_par_iter()
+            .map(|(i, count)| {
+                let index = i - count; // current column
+
+                let p = propagate[i + 1].clone(); // propagate from a previous column
+                let g = generate[i + 1].clone(); // generate from a previous column
+                let new_p;
+                let new_g;
+
+                if index < 32 - (2 * stride) { // black cell
+                    new_p = sk.and(&propagate[index], &p);
+                    new_g = sk.or(&generate[index], &sk.and(&g, &propagate[index]));
+
+                } else { // grey cell
+                    new_p = propagate[index].clone();
+                    new_g = sk.or(&generate[index], &sk.and(&g, &propagate[index]));
+                }
+                (index, new_p, new_g)
+            })
+            .collect();
+
+        for (index, new_p, new_g) in updates {
+            propagate[index] = new_p;
+            generate[index] = new_g;
+        }
+    }
+
+    let mut carry = trivial_bools(&[false; 32], sk);
+    for bit in 0..31 {
+        carry[bit] = generate[bit + 1].clone();
     }
 
     carry
@@ -77,145 +114,60 @@ fn shift_right(x: &[Ciphertext; 32], n: usize, sk: &ServerKey) -> [Ciphertext; 3
     result
 }
 
-// 4 batches of 32 parallelized bool ops (128)
+// 1 batch of 32 parallelized bool ops
 pub fn ch(x: &[Ciphertext; 32], y: &[Ciphertext; 32], z: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
-    let t1 = and(x, y, sk);
-    let t2 = and(&not(x, sk), z, sk);
-    xor(&t1, &t2, sk)
+    mux(x, y, z, sk)
 }
 
-// 5 batches of 32 parallelized bool ops (160)
+// 4 batches of 32 parallelized bool ops
 pub fn maj(x: &[Ciphertext; 32], y: &[Ciphertext; 32], z: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
-    let t1 = and(x, y, sk);
-    let t2 = and(x, z, sk);
-    let t3 = and(y, z, sk);
-    xor(&xor(&t1, &t2, sk), &t3, sk)
+    let right = and(x, &xor(y, z, sk), sk);
+    let left = and(y, z, sk);
+    xor(&left, &right, sk)
 }
 
 // 32 parallelized bool ops
 // Building block for most of the previous functions
 fn xor(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
-    let mut result = trivial_bools(&[false; 32], sk);
-    let mut handles = vec![];
+    let result: Vec<Ciphertext> = (0..32)
+        .into_par_iter()
+        .map(|i| sk.xor(&a[i], &b[i]))
+        .collect();
 
-    let a = Arc::new(a.clone());
-    let b = Arc::new(b.clone());
-    let sk = Arc::new(sk.clone());
-
-    for t in 0..8 {
-        let a = Arc::clone(&a);
-        let b = Arc::clone(&b);
-        let sk = Arc::clone(&sk);
-
-        let handle = thread::spawn(move || {
-            let mut partial_result = vec![
-                sk.trivial_encrypt(false), sk.trivial_encrypt(false),
-                sk.trivial_encrypt(false), sk.trivial_encrypt(false),
-            ];
-
-            let start = t * 4;
-            let end = start + 4;
-
-            for i in start..end {
-                let idx = i - start;
-                partial_result[idx] = sk.xor(&a[i], &b[i]);
-            }
-            partial_result
-        });
-
-        handles.push(handle);
+    let mut array = trivial_bools(&[false; 32], sk);
+    for (i, elem) in result.into_iter().enumerate() {
+        array[i] = elem;
     }
 
-    for (i, handle) in handles.into_iter().enumerate() {
-        let partial_result = handle.join().unwrap();
-        let start = i * 4;
-        let end = start + 4;
-
-        result[start..end].clone_from_slice(&partial_result);
-    }
-    result
+    array
 }
 
 fn and(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
-    let mut result = trivial_bools(&[false; 32], sk);
-    let mut handles = vec![];
+    let result: Vec<Ciphertext> = (0..32)
+        .into_par_iter()
+        .map(|i| sk.and(&a[i], &b[i]))
+        .collect();
 
-    let a = Arc::new(a.clone());
-    let b = Arc::new(b.clone());
-    let sk = Arc::new(sk.clone());
-
-    for t in 0..8 {
-        let a = Arc::clone(&a);
-        let b = Arc::clone(&b);
-        let sk = Arc::clone(&sk);
-
-        let handle = thread::spawn(move || {
-            let mut partial_result = vec![
-                sk.trivial_encrypt(false), sk.trivial_encrypt(false),
-                sk.trivial_encrypt(false), sk.trivial_encrypt(false),
-            ];
-
-            let start = t * 4;
-            let end = start + 4;
-
-            for i in start..end {
-                let idx = i - start;
-                partial_result[idx] = sk.and(&a[i], &b[i]);
-            }
-            partial_result
-        });
-
-        handles.push(handle);
+    let mut array = trivial_bools(&[false; 32], sk);
+    for (i, elem) in result.into_iter().enumerate() {
+        array[i] = elem;
     }
 
-    for (i, handle) in handles.into_iter().enumerate() {
-        let partial_result = handle.join().unwrap();
-        let start = i * 4;
-        let end = start + 4;
-
-        result[start..end].clone_from_slice(&partial_result);
-    }
-    result
+    array
 }
 
-fn not(a: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
-    let mut result = trivial_bools(&[false; 32], sk);
-    let mut handles = vec![];
+fn mux(condition: &[Ciphertext; 32], then: &[Ciphertext; 32], otherwise: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
+    let result: Vec<Ciphertext> = (0..32)
+        .into_par_iter()
+        .map(|i| sk.mux(&condition[i], &then[i], &otherwise[i]))
+        .collect();
 
-    let a = Arc::new(a.clone());
-    let sk = Arc::new(sk.clone());
-
-    for t in 0..8 {
-        let a = Arc::clone(&a);
-        let sk = Arc::clone(&sk);
-
-        let handle = thread::spawn(move || {
-            let mut partial_result = vec![
-                sk.trivial_encrypt(false), sk.trivial_encrypt(false),
-                sk.trivial_encrypt(false), sk.trivial_encrypt(false),
-            ];
-
-            let start = t * 4;
-            let end = start + 4;
-
-            for i in start..end {
-                let idx = i - start;
-                partial_result[idx] = sk.not(&a[i]);
-            }
-            partial_result
-        });
-
-        handles.push(handle);
+    let mut array = trivial_bools(&[false; 32], sk);
+    for (i, elem) in result.into_iter().enumerate() {
+        array[i] = elem;
     }
 
-    for (i, handle) in handles.into_iter().enumerate() {
-        let partial_result = handle.join().unwrap();
-        let start = i * 4;
-        let end = start + 4;
-
-        result[start..end].clone_from_slice(&partial_result);
-    }
-    result
+    array
 }
 
 // Trivial encryption of 32 bools
