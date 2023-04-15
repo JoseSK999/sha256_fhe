@@ -2,7 +2,7 @@
 
 ## Intro
 
-In this tutorial we will go through the steps to turn a regular sha256 implementation into its homomorphic version. We will explain the basics of the sha256 function first, and then how to implement it homomorphically with performance considerations. Finally we will discuss design choices and further improvements yet to be made.
+In this tutorial we will go through the steps to turn a regular sha256 implementation into its homomorphic version. We explain the basics of the sha256 function first, and then how to implement it homomorphically with performance considerations.
 
 ## Sha256
 
@@ -26,11 +26,9 @@ Where the numbers on the top represent the length of the padded input at each po
 
 #### Operations and functions
 
-We also find the operations that we will use as building blocks for functions inside the sha256 computation. These are bitwise AND, XOR, NOT, addition modulo 2^32 and the Rotate Right (ROTR) and Shift Right (SHR) operations, all working with 32-bit words and producing a new word.
+Let's take a look at the operations that we will use as building blocks for functions inside the sha256 computation. These are bitwise AND, XOR, NOT, addition modulo 2^32 and the Rotate Right (ROTR) and Shift Right (SHR) operations, all working with 32-bit words and producing a new word.
 
-Note that ROTR and SHR can be evaluated by changing the index of each individual bit of the word, even if each bit is encrypted. Note also that the other bitwise operations can be computed homomorphically and that addition can be broken down into homomorphic boolean operations.
-
-We then combine the operations inside the sigma (with 4 variations), ch and maj functions. At the end of the day, when we change the sha256 to be computed homomorphically, we will mainly change the isolated code of the operations used within these functions.
+We combine these operations inside the sigma (with 4 variations), Ch and Maj functions. At the end of the day, when we change the sha256 to be computed homomorphically, we will mainly change the isolated code of each operation.
 
 Here is the definition of each function:
 ```
@@ -42,6 +40,26 @@ Maj(x, y, z) = (x AND y) XOR (x AND z) XOR (y AND z)
 σ0(x) = ROTR-7(x) XOR ROTR-18(x) XOR SHR-3(x)
 σ1(x) = ROTR-17(x) XOR ROTR-19(x) XOR SHR-10(x)
 ```
+There are some things to note about the functions. Firstly we see that Maj can be simplified by applying the boolean distributive law (x AND y) XOR (x AND z) = x AND (y XOR z). So the new Maj function looks like this:
+
+```
+Maj(x, y, z) = (x AND (y XOR z)) XOR (y AND z)
+```
+Next we can also see that Ch can be simplified by using a single bitwise multiplexer. Let's take a look at the truth table of the Ch expression.
+| x | y | z | Result |
+| - | - | - | ------ |
+| 0 | 0 | 0 | 0      |
+| 0 | 0 | 1 | 1      |
+| 0 | 1 | 0 | 0      |
+| 0 | 1 | 1 | 1      |
+| 1 | 0 | 0 | 0      |
+| 1 | 0 | 1 | 0      |
+| 1 | 1 | 0 | 1      |
+| 1 | 1 | 1 | 1      |
+
+When ```x = 0``` the result is identical to ```z```, but when ```x = 1``` the result is identical to ```y```. This is the same as saying ```if x {y} else {z}```. Hence we can replace the 4 bitwise operations of Ch by a single bitwise multiplexer.
+
+Note that all these operations can be evaluated homomorphically. ROTR and SHR can be evaluated by changing the index of each individual bit of the word, even if each bit is encrypted, without using any homomorphic operation. Bitwise AND, XOR and multiplexer can be computed homomorphically and addition modulo 2^32 can be broken down into boolean homomorphic operations as well.
 
 #### Sha256 computation
 
@@ -121,7 +139,7 @@ fn sha256(padded_input: Vec<bool>) -> [bool; 256] {
 
 The key idea is that we can replace each bit of ```padded_input``` with a Fully Homomorphic Encryption of the same bit value, and operate over the encrypted values using homomorphic operations. To achieve this we need to change the function signatures and deal with the borrowing rules of the Ciphertext type (which represents an encrypted bit) but the structure of the sha256 function remains the same. The part of the code that requires more consideration is the implementation of the sha256 operations, since they will use homomorphic boolean operations internally.
 
-Since homomorphic operations are really expensive, we have to remove their unnecessary use and maximize parallelization in order to speed up the program. Let's take a look at each sha256 operation.
+Homomorphic operations are really expensive, so we have to remove their unnecessary use and maximize parallelization in order to speed up the program. To simplify our code we use the Rayon crate which provides parallel iterators and efficiently manages threads. Let's now take a look at each sha256 operation!
 
 #### Rotate Right and Shift Right
 
@@ -144,66 +162,35 @@ fn shift_right(x: &[Ciphertext; 32], n: usize, sk: &ServerKey) -> [Ciphertext; 3
     result
 }
 ```
-We see a function called ``trivial_bools`` that we will use along our implementation to initialize an array of 32 Ciphertexts. This is because we cannot copy the same Ciphertext for each position of the array as we do with simple bools, so we create 32 different trivial encryptions. We will also use this function in order to trivially encrypt constant values to operate homomorphically with them.
+We see a function called ``trivial_bools`` that we use along our implementation to initialize an array of 32 Ciphertexts. This is because we cannot copy the same Ciphertext for each position of the array as we do with simple bools, so we create 32 different trivial encryptions. We will also use this function in order to trivially encrypt constant values to operate homomorphically with them.
 
-#### Bitwise XOR, AND, NOT
+#### Bitwise XOR, AND, Multiplexer
 
-To implement these operations we will use the ```xor```, ```and``` and ```not``` methods provided by the tfhe library to evaluate each boolean operation homomorphically. It's important to note that, since we will operate bitwise, we can parallelize the homomorphic computations. In other words, we can homomorphically XOR the bits at index 0 of two words using a thread, while XORing the bits at index 1 using another thread, and so on. This means we could compute these bitwise operations using up to 32 concurrent threads (since we work with 32-bit words).
+To implement these operations we will use the ```xor```, ```and``` and ```mux``` methods provided by the tfhe library to evaluate each boolean operation homomorphically. It's important to note that, since we will operate bitwise, we can parallelize the homomorphic computations. In other words, we can homomorphically XOR the bits at index 0 of two words using a thread, while XORing the bits at index 1 using another thread, and so on. This means we could compute these bitwise operations using up to 32 concurrent threads (since we work with 32-bit words).
 
-In our specific implementation we have used 8 threads, which modern computers usually support. However we can change the parameters as we will soon demonstrate to change the number of threads, or even replace them with more advanced concurrency techniques.
-
-Here is our implementation of the bitwise homomorphic XOR operation, where each thread computes a partial result of 4 bits (8 threads * 4 bits = 32 bits). When all the partial results have been computed we combine them into the resulting 32 Ciphertext array. The other two bitwise operations are implemented in the same way.
+Here is our implementation of the bitwise homomorphic XOR operation. The ```into_par_iter``` method creates a parallel iterator that computes each individual XOR efficiently. When all threads are done, we use an array to return the final word. The other two bitwise operations are implemented in the same way.
 
 ```rust
 fn xor(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
-    let mut result = trivial_bools(&[false; 32], sk);
-    let mut handles = vec![];
+    let result: Vec<Ciphertext> = (0..32)
+        .into_par_iter()
+        .map(|i| sk.xor(&a[i], &b[i]))
+        .collect();
 
-    let a = Arc::new(a.clone());
-    let b = Arc::new(b.clone());
-    let sk = Arc::new(sk.clone());
-
-    for t in 0..8 { // 8 threads
-        let a = Arc::clone(&a);
-        let b = Arc::clone(&b);
-        let sk = Arc::clone(&sk);
-
-        let handle = thread::spawn(move || {
-            let mut partial_result = vec![
-                sk.trivial_encrypt(false), sk.trivial_encrypt(false),
-                sk.trivial_encrypt(false), sk.trivial_encrypt(false), // Length of partial result = 4
-            ];
-
-            let start = t * 4;
-            let end = start + 4;
-
-            for i in start..end {
-                let idx = i - start;
-                partial_result[idx] = sk.xor(&a[i], &b[i]); // homomorphic boolean XOR
-            }
-            partial_result
-        });
-
-        handles.push(handle);
+    let mut array = trivial_bools(&[false; 32], sk);
+    for (i, elem) in result.into_iter().enumerate() {
+        array[i] = elem;
     }
 
-    for (i, handle) in handles.into_iter().enumerate() {
-        let partial_result = handle.join().unwrap();
-        let start = i * 4;
-        let end = start + 4;
-
-        result[start..end].clone_from_slice(&partial_result);
-    }
-    result
+    array
 }
 ```
-Note that ```partial_result``` is initialized with 4 Ciphertexts and that we compute ```start``` multiplying a variable by 4 and ```end``` by adding 4. So if for instance we want to use 16 threads, we will have to run the first for loop 16 times, set the length of ```partial_result``` to 2 (16 * 2 = 32) and also compute ```start``` and ```end``` using 2. And that's it.
 
 #### Addition modulo 2^32
 
 This is perhaps the trickiest operation to efficiently implement in a homomorphic fashion. A naive implementation could use the Ripple Carry Adder algorithm, which is straightforward but cannot be parallelized because each step depends on the previous one.
 
-A better choice would be the Carry Lookahead Adder, which allows us to use the previous AND and XOR bitwise operations. This way we are abstracting away the parallel processing of the addition operation. Here is our implementation, which is around 50% faster than the naive Ripple Carry Adder.
+A better choice would be the Carry Lookahead Adder, which allows us to use the parallelized AND and XOR bitwise operations. With this design, our adder is around 50% faster than the Ripple Carry Adder.
 
 ```rust
 pub fn add(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
@@ -217,7 +204,13 @@ pub fn add(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphe
 }
 ```
 
-With all these sha256 operations working homomorphically, our functions will be homomomorphic as well along with the whole sha256 function (after adapting the code to work with the Ciphertext type).
+But we can improve performance more. The function that computes the carry signals can also be parallelized using parallel prefix algorithms like the Kogge-Stone, Brent-Kung or Ladner-Fischer. We have chosen the last one since it has the same number of stages (we can only parallelize one stage at a time) than Kogge-Stone and less operations, and it has fewer stages than Brent-Kung.
+
+Some carry operations are optimized by using a so-called grey cell, which performs 2 boolean operations instead of 3. For more information about these algorithms you can read [this paper](https://www.iosrjournals.org/iosr-jece/papers/Vol6-Issue1/A0610106.pdf) or [this other](https://www.ijert.org/research/design-and-implementation-of-parallel-prefix-adder-for-improving-the-performance-of-carry-lookahead-adder-IJERTV4IS120608.pdf).
+
+Our Ladner-Fischer Adder implementation further reduces the addition time by more than 10 seconds on a regular computer.
+
+Finally, with all these sha256 operations working homomorphically, our functions will be homomomorphic as well along with the whole sha256 function (after adapting the code to work with the Ciphertext type).
 
 ## How to use sha256_fhe
 
@@ -247,9 +240,3 @@ fn main() {
 We can see that padding is executed on the client side. This has the advantage of hiding the exact length of the input to the server, who already doesn't know anything about the contents of it but may extract information from the length. 
 
 Another option would be to perform padding on the server side. The padding function would receive the encrypted input and pad it with trivial bit encryptions. We could then integrate the padding function inside the ```sha256_fhe``` function computed by the server.
-
-## Future improvements
-
-We didn't mention the ```compute_carry``` function that we use in the implementation of the Carry Lookahead Adder. This function computes the carry signal in a sequential way. Specifically it performs 62 sequential homomorphic operations, which as we know makes things much slower. Ideally we could implement an algorithm that reduces the sequential dependencies.
-
-There is also room for improvement by reducing the number of deep copies, although the performance improvement we would get is second or third order compared to the performance gain we get by parallelizing ```compute_carry```.
