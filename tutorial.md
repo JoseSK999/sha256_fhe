@@ -208,7 +208,7 @@ But we can improve performance more. The function that computes the carry signal
 
 Some carry operations are optimized by using a so-called grey cell, which performs 2 boolean operations instead of 3. For more information about these algorithms you can read [this paper](https://www.iosrjournals.org/iosr-jece/papers/Vol6-Issue1/A0610106.pdf) or [this other](https://www.ijert.org/research/design-and-implementation-of-parallel-prefix-adder-for-improving-the-performance-of-carry-lookahead-adder-IJERTV4IS120608.pdf).
 
-Our Ladner-Fischer Adder implementation further reduces the addition time by more than 10 seconds on a regular computer.
+Our Ladner-Fischer Adder implementation further reduces the addition time by more than 100 milliseconds when running the program with the ```--release``` flag. This translates in a reduction of 1 minute per chunk iteration.
 
 Finally, with all these sha256 operations working homomorphically, our functions will be homomomorphic as well along with the whole sha256 function (after adapting the code to work with the Ciphertext type).
 
