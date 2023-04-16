@@ -202,13 +202,24 @@ pub fn add(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphe
 
     sum
 }
+
+fn compute_carry(propagate: &[Ciphertext; 32], generate: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
+    let mut carry = trivial_bools(&[false; 32], sk);
+    carry[31] = sk.trivial_encrypt(false);
+
+    for i in (0..31).rev() {
+        carry[i] = sk.or(&generate[i + 1], &sk.and(&propagate[i + 1], &carry[i + 1]));
+    }
+
+    carry
+}
 ```
 
-But we can improve performance more. The function that computes the carry signals can also be parallelized using parallel prefix algorithms like the Kogge-Stone, Brent-Kung or Ladner-Fischer. We have chosen the last one since it has the same number of stages (we can only parallelize one stage at a time) than Kogge-Stone and less operations, and it has fewer stages than Brent-Kung.
+To even improve performance more, the function that computes the carry signals can also be parallelized using parallel prefix algorithms like the Kogge-Stone, Brent-Kung or Ladner-Fischer. We have chosen the last one since it has the same number of stages (we can only parallelize one stage at a time) than Kogge-Stone and less operations, and it has fewer stages than Brent-Kung.
 
-Some carry operations are optimized by using a so-called grey cell, which performs 2 boolean operations instead of 3. For more information about these algorithms you can read [this paper](https://www.iosrjournals.org/iosr-jece/papers/Vol6-Issue1/A0610106.pdf) or [this other](https://www.ijert.org/research/design-and-implementation-of-parallel-prefix-adder-for-improving-the-performance-of-carry-lookahead-adder-IJERTV4IS120608.pdf).
+Some carry operations are optimized by using so-called grey cells, which perform 2 boolean operations instead of 3. For more information about these algorithms you can read [this paper](https://www.iosrjournals.org/iosr-jece/papers/Vol6-Issue1/A0610106.pdf) or [this other](https://www.ijert.org/research/design-and-implementation-of-parallel-prefix-adder-for-improving-the-performance-of-carry-lookahead-adder-IJERTV4IS120608.pdf).
 
-Our Ladner-Fischer Adder implementation further reduces the addition time by more than 100 milliseconds when running the program with the ```--release``` flag. This translates in a reduction of 1 minute per chunk iteration.
+However this approach will slow things down when working with moderately fast CPUs, since they can perform the sequential algorithm faster than the parallelized one (at least these have been our results). So we have made the sequential algorithm default, although the parallel prefix algorithm has also been added.
 
 Finally, with all these sha256 operations working homomorphically, our functions will be homomomorphic as well along with the whole sha256 function (after adapting the code to work with the Ciphertext type).
 
