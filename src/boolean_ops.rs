@@ -6,19 +6,32 @@ use rayon::prelude::*;
 use tfhe::boolean::prelude::{BinaryBooleanGates, Ciphertext, ServerKey};
 
 // Carry Lookahead adder modulo 2^32
-// 3 batches of 32 parallelized bool ops + parallelized carry signal computation
+// 3 batches of 32 parallelized bool ops + carry signal computation
 pub fn add(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
     let propagate = xor(a, b, sk);
     let generate = and(a, b, sk);
 
-    let carry = ladner_fischer_carry(&propagate, &generate, sk);
+    let carry = compute_carry(&propagate, &generate, sk);
     let sum = xor(&propagate, &carry, sk);
 
     sum
 }
 
-// Implementation of the Ladner Fischer parallel prefix algorithm, optimized with grey cells
-// Each of the 5 stages performs 16 fundamental carry operations in parallel
+// Sequential computation of the carry signal which will often perform better than a parallel prefix algorithm
+fn compute_carry(propagate: &[Ciphertext; 32], generate: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
+    let mut carry = trivial_bools(&[false; 32], sk);
+    carry[31] = sk.trivial_encrypt(false);
+
+    for i in (0..31).rev() {
+        carry[i] = sk.or(&generate[i + 1], &sk.and(&propagate[i + 1], &carry[i + 1]));
+    }
+
+    carry
+}
+
+// Implementation of the Ladner Fischer parallel prefix algorithm where each of the 5 stages performs 16 fundamental carry operations in parallel
+// This function may perform better than the previous one when CPUs are relatively slow
+#[allow(dead_code)]
 fn ladner_fischer_carry(propagate: &[Ciphertext; 32], generate: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
     let mut propagate = propagate.clone();
     let mut generate = generate.clone();
