@@ -219,7 +219,7 @@ To even improve performance more, the function that computes the carry signals c
 
 Brent-Kung had the least amount of boolean operations we could find (140 when using grey cells), so we finally implemented it. Our results confirm that it's indeed faster than both the sequential one and Ladner-Fischer. When ran with the ```--release``` flag, we see a reduction in runtime of more than one minute.
 
-For more information about parallel algorithms you can read [this paper](https://www.iosrjournals.org/iosr-jece/papers/Vol6-Issue1/A0610106.pdf) or [this other](https://www.ijert.org/research/design-and-implementation-of-parallel-prefix-adder-for-improving-the-performance-of-carry-lookahead-adder-IJERTV4IS120608.pdf).
+For more information about parallel prefix adders you can read [this paper](https://www.iosrjournals.org/iosr-jece/papers/Vol6-Issue1/A0610106.pdf) or [this other](https://www.ijert.org/research/design-and-implementation-of-parallel-prefix-adder-for-improving-the-performance-of-carry-lookahead-adder-IJERTV4IS120608.pdf).
 
 Finally, with all these sha256 operations working homomorphically, our functions will be homomomorphic as well along with the whole sha256 function (after adapting the code to work with the Ciphertext type).
 
