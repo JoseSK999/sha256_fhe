@@ -1,6 +1,6 @@
 // This module contains all the operations and functions used in the sha256 function, implemented with homomorphic boolean
 // operations. We use multi-threading to speed up operations, specifically in the "and", "xor", "mux" bitwise operations,
-// used as building block for the rest of functions, and in the Ladner Fischer carry signal computation.
+// used as building block for the rest of functions, and in the Brent Kung carry signal computation.
 
 use rayon::prelude::*;
 use tfhe::boolean::prelude::{BinaryBooleanGates, Ciphertext, ServerKey};
