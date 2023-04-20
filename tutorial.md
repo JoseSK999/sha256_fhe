@@ -217,7 +217,7 @@ fn compute_carry(propagate: &[Ciphertext; 32], generate: &[Ciphertext; 32], sk: 
 
 To even improve performance more, the function that computes the carry signals can also be parallelized using parallel prefix algorithms like the Kogge-Stone, Brent-Kung or Ladner-Fischer. The issue with these algorithms is that they perform more boolean operations (so homomorphic operations for us) than the sequential one. For example Ladner-Fischer performs 240 boolean operations, or 209 if we use "grey cells". The sequential algorithm will usually perform the 62 sequential homomorphic operations faster.
 
-Brent-Kung had the least amount of boolean operations we could find (140 when using grey cells), so we finally implemented it. Our results confirm that it's indeed faster than both the sequential one and Ladner-Fischer. When run with the ```--release``` flag, we see a reduction in runtime of more than one minute.
+Brent-Kung had the least amount of boolean operations we could find (140 when using grey cells), so we finally implemented it. Our results confirm that it's indeed faster than both the sequential one and Ladner-Fischer. When run with the ```--release``` flag, we see a reduction in runtime of more than one minute for each chunk iteration. The longer the input the more we will notice this optimization.
 
 For more information about parallel prefix adders you can read [this paper](https://www.iosrjournals.org/iosr-jece/papers/Vol6-Issue1/A0610106.pdf) or [this other](https://www.ijert.org/research/design-and-implementation-of-parallel-prefix-adder-for-improving-the-performance-of-carry-lookahead-adder-IJERTV4IS120608.pdf).
 
