@@ -215,11 +215,11 @@ fn compute_carry(propagate: &[Ciphertext; 32], generate: &[Ciphertext; 32], sk: 
 }
 ```
 
-To even improve performance more, the function that computes the carry signals can also be parallelized using parallel prefix algorithms like the Kogge-Stone, Brent-Kung or Ladner-Fischer. We have chosen the last one since it has the same number of stages (we can only parallelize one stage at a time) than Kogge-Stone and less operations, and it has fewer stages than Brent-Kung.
+To even improve performance more, the function that computes the carry signals can also be parallelized using parallel prefix algorithms like the Kogge-Stone, Brent-Kung or Ladner-Fischer. The issue with these algorithms is that they perform more boolean operations (so homomorphic operations for us) than the sequential one. For example Ladner-Fischer performs 240 boolean operations, or 209 if we use "grey cells". The sequential algorithm will usually perform the 62 sequential homomorphic operations faster.
 
-Some carry operations are optimized by using so-called grey cells, which perform 2 boolean operations instead of 3. For more information about these algorithms you can read [this paper](https://www.iosrjournals.org/iosr-jece/papers/Vol6-Issue1/A0610106.pdf) or [this other](https://www.ijert.org/research/design-and-implementation-of-parallel-prefix-adder-for-improving-the-performance-of-carry-lookahead-adder-IJERTV4IS120608.pdf).
+Brent-Kung had the least amount of boolean operations we could find (140 when using grey cells), so we finally implemented it. Our results confirm that it's indeed faster than both the sequential one and Ladner-Fischer. When ran with the ```--release``` flag, we see a reduction in runtime of more than one minute.
 
-However this approach will slow things down when working with moderately fast CPUs, since they can perform the sequential algorithm faster than the parallelized one (at least these have been our results). So we have made the sequential algorithm default, although the parallel prefix algorithm has also been added.
+For more information about parallel algorithms you can read [this paper](https://www.iosrjournals.org/iosr-jece/papers/Vol6-Issue1/A0610106.pdf) or [this other](https://www.ijert.org/research/design-and-implementation-of-parallel-prefix-adder-for-improving-the-performance-of-carry-lookahead-adder-IJERTV4IS120608.pdf).
 
 Finally, with all these sha256 operations working homomorphically, our functions will be homomomorphic as well along with the whole sha256 function (after adapting the code to work with the Ciphertext type).
 
