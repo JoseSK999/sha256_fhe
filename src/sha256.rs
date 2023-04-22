@@ -4,6 +4,7 @@ use tfhe::boolean::prelude::*;
 use crate::boolean_ops::{add, sigma0, sigma1, ch, maj, sigma_upper_case_0, sigma_upper_case_1, trivial_bools};
 
 pub fn sha256_fhe(padded_input: Vec<Ciphertext>, sk: &ServerKey) -> Vec<Ciphertext> {
+    assert_eq!(padded_input.len() % 512, 0, "padded input length is not a multiple of 512");
 
     // Initialize hash values
     let mut hash: [[Ciphertext; 32]; 8] = [
