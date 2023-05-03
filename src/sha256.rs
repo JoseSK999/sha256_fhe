@@ -1,4 +1,4 @@
-// This module implements the main sha256 homomorphic function and some helper functions
+// This module implements the main sha256 homomorphic function using parallel processing when possible and some helper functions
 
 use tfhe::boolean::prelude::*;
 use crate::boolean_ops::{add, sigma0, sigma1, ch, maj, sigma_upper_case_0, sigma_upper_case_1, trivial_bools};
@@ -30,7 +30,12 @@ pub fn sha256_fhe(padded_input: Vec<Ciphertext>, sk: &ServerKey) -> Vec<Cipherte
         }
 
         for i in 16..64 {
-            w[i] = add(&add(&add(&sigma1(&w[i - 2], sk), &w[i - 7], sk), &sigma0(&w[i - 15], sk), sk), &w[i - 16], sk);
+            let (lhs, rhs) = rayon::join(
+                || add(&sigma1(&w[i - 2], sk), &w[i - 7], sk),
+                || add(&sigma0(&w[i - 15], sk), &w[i - 16], sk)
+            );
+
+            w[i] = add(&lhs, &rhs, sk);
         }
 
         let mut a = hash[0].clone();
@@ -44,16 +49,39 @@ pub fn sha256_fhe(padded_input: Vec<Ciphertext>, sk: &ServerKey) -> Vec<Cipherte
 
         // Compression loop
         for i in 0..64 {
-            let temp1 = add(&add(&add(&add(&h, &ch(&e, &f, &g, sk), sk), &w[i], sk), &trivial_bools(&hex_to_bools(K[i]), sk), sk), &sigma_upper_case_1(&e, sk), sk);
-            let temp2 = add(&sigma_upper_case_0(&a, sk), &maj(&a, &b, &c, sk), sk);
+            let (temp1, temp2) = rayon::join(
+                || {
+                    let (lhs, rhs) = rayon::join(
+                        || add(
+                            &add(&w[i], &h, sk),
+                            &trivial_bools(&hex_to_bools(K[i]), sk),
+                            sk),
+                        || add(
+                            &ch(&e, &f, &g, sk),
+                            &sigma_upper_case_1(&e, sk),
+                            sk),
+                    );
+
+                    add(&lhs, &rhs, sk)
+                },
+                || add(
+                    &sigma_upper_case_0(&a, sk),
+                    &maj(&a, &b, &c, sk), sk),
+            );
+
+            let (temp_e, temp_a) = rayon::join(
+                || add(&d, &temp1, sk),
+                || add(&temp1, &temp2, sk),
+            );
+
             h = g;
             g = f;
             f = e;
-            e = add(&d, &temp1, sk);
+            e = temp_e;
             d = c;
             c = b;
             b = a;
-            a = add(&temp1, &temp2, sk);
+            a = temp_a;
         }
 
         hash[0] = add(&hash[0], &a, sk);
