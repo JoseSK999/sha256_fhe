@@ -1,23 +1,26 @@
 // This module contains all the operations and functions used in the sha256 function, implemented with homomorphic boolean
 // operations. We use multi-threading to speed up operations, specifically in the "and", "xor", "mux" bitwise operations,
-// used as building block for the rest of functions, and in the Brent Kung carry signal computation.
+// used as building block for the rest of functions, and in the carry signal computation.
 
 use rayon::prelude::*;
 use tfhe::boolean::prelude::{BinaryBooleanGates, Ciphertext, ServerKey};
 
-// Carry Lookahead adder modulo 2^32
-// 3 batches of 32 parallelized bool ops + carry signal computation
 pub fn add(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
     let propagate = xor(a, b, sk);
     let generate = and(a, b, sk);
 
-    let carry = brent_kung(&propagate, &generate, sk);
+    let carry = if cfg!(feature = "ladner_fischer") {
+        ladner_fischer(&propagate, &generate, sk)
+    } else {
+        brent_kung(&propagate, &generate, sk)
+    };
+
     let sum = xor(&propagate, &carry, sk);
 
     sum
 }
 
-// Implementation of the Brent Kung parallel prefix algorithm, optimized with grey cells
+// Implementation of the Brent Kung parallel prefix algorithm
 // This function computes the carry signals in parallel while minimizing the number of homomorphic operations
 fn brent_kung(propagate: &[Ciphertext; 32], generate: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
     let mut propagate = propagate.clone();
@@ -75,6 +78,57 @@ fn brent_kung(propagate: &[Ciphertext; 32], generate: &[Ciphertext; 32], sk: &Se
                     generate[index] = new_g;
                 }
             }
+        }
+    }
+
+    let mut carry = trivial_bools(&[false; 32], sk);
+    for bit in 0..31 {
+        carry[bit] = generate[bit + 1].clone();
+    }
+
+    carry
+}
+
+// Implementation of the Ladner Fischer parallel prefix algorithm
+// This function may perform better than the previous one when many threads are available as it has less stages
+fn ladner_fischer(propagate: &[Ciphertext; 32], generate: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
+    let mut propagate = propagate.clone();
+    let mut generate = generate.clone();
+
+    for d in 0..5 {
+        let stride = 1 << d;
+
+        let indices: Vec<(usize, usize)> = (0..32 - stride)
+            .rev()
+            .step_by(2 * stride)
+            .flat_map(|i| (0..stride).map(move |count| (i, count)))
+            .collect();
+
+        let updates: Vec<(usize, Ciphertext, Ciphertext)> = indices
+            .into_par_iter()
+            .map(|(i, count)| {
+                let index = i - count; // current column
+
+                let p = propagate[i + 1].clone(); // propagate from a previous column
+                let g = generate[i + 1].clone(); // generate from a previous column
+                let new_p;
+                let new_g;
+
+                if index < 32 - (2 * stride) { // black cell
+                    new_p = sk.and(&propagate[index], &p);
+                    new_g = sk.or(&generate[index], &sk.and(&g, &propagate[index]));
+
+                } else { // grey cell
+                    new_p = propagate[index].clone();
+                    new_g = sk.or(&generate[index], &sk.and(&g, &propagate[index]));
+                }
+                (index, new_p, new_g)
+            })
+            .collect();
+
+        for (index, new_p, new_g) in updates {
+            propagate[index] = new_p;
+            generate[index] = new_g;
         }
     }
 
