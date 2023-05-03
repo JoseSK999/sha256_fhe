@@ -215,28 +215,95 @@ fn compute_carry(propagate: &[Ciphertext; 32], generate: &[Ciphertext; 32], sk: 
 }
 ```
 
-To even improve performance more, the function that computes the carry signals can also be parallelized using parallel prefix algorithms like the Kogge-Stone, Brent-Kung or Ladner-Fischer. The issue with these algorithms is that they perform more boolean operations (so homomorphic operations for us) than the sequential one. For example Ladner-Fischer performs 240 boolean operations, or 209 if we use "grey cells". The sequential algorithm will usually perform the 62 sequential homomorphic operations faster.
+To even improve performance more, the function that computes the carry signals can also be parallelized using parallel prefix algorithms. These algorithms involve more boolean operations (so homomorphic operations for us) but may be faster because of their parallel nature. We have implemented the Brent-Kung and Ladner-Fischer algorithms, which entail different tradeoffs.
 
-Brent-Kung had the least amount of boolean operations we could find (140 when using grey cells), so we finally implemented it. Our results confirm that it's indeed faster than both the sequential one and Ladner-Fischer. When run with the ```--release``` flag, we see a reduction in runtime of more than one minute for each chunk iteration. The longer the input the more we will notice this optimization.
+Brent-Kung has the least amount of boolean operations we could find (140 when using grey cells, for 32-bit numbers), which makes it suitable when we can't process many operations concurrently and fast. Our results confirm that it's indeed faster than both the sequential algorithm and Ladner-Fischer when run on regular computers.
+
+On the other hand, Ladner-Fischer performs more boolean operations (209 using grey cells) than Brent-Kung, but they are performed in larger batches. Hence we can compute more operations in parallel and finish earlier, but we need more fast threads available or they will slow down the carry signals computation. Ladner-Fischer can be suitable when using cloud-based computing services, which offer many high-speed threads.
+
+Our implementation uses Brent-Kung by default, but Ladner-Fischer can be enabled when needed, either by running with ```--features ladner_fischer``` or by setting it as default in the ```cargo.toml``` file, like so:
+
+```rust
+[features]
+default = ["ladner_fischer"]
+ladner_fischer = []
+```
+
+The carry signals part of the ```add``` function will look like this (skipping the implementations of the parallel prefix algorithms):
+
+```rust
+    let carry = if cfg!(feature = "ladner_fischer") {
+        ladner_fischer(&propagate, &generate, sk)
+    } else {
+        brent_kung(&propagate, &generate, sk)
+    };
+```
 
 For more information about parallel prefix adders you can read [this paper](https://www.iosrjournals.org/iosr-jece/papers/Vol6-Issue1/A0610106.pdf) or [this other](https://www.ijert.org/research/design-and-implementation-of-parallel-prefix-adder-for-improving-the-performance-of-carry-lookahead-adder-IJERTV4IS120608.pdf).
 
-Finally, with all these sha256 operations working homomorphically, our functions will be homomomorphic as well along with the whole sha256 function (after adapting the code to work with the Ciphertext type).
+Finally, with all these sha256 operations working homomorphically, our functions will be homomomorphic as well along with the whole sha256 function (after adapting the code to work with the Ciphertext type). Let's talk about another performance improvement we can make before we finish.
+
+### More parallel processing
+
+If we inspect the main ```sha256``` function, we will find operations that can be performed in parallel. For instance, within the compression loop, ```temp1``` and ```temp2``` can be computed concurrently. An efficient way to parallelize computations here is using the ```rayon::join()``` function, which uses parallel processing only when CPUs are available.
+
+Recall that the two temporary values in the compression loop perform several additions, so we can use a nested call to ```rayon::join()``` to potentially parallelize more operations.
+
+```rust
+let (temp1, temp2) = rayon::join(
+    || {
+        let (lhs, rhs) = rayon::join(
+            || add(
+                &add(&w[i], &h, sk),
+                &trivial_bools(&hex_to_bools(K[i]), sk),
+                sk),
+            || add(
+                &ch(&e, &f, &g, sk),
+                &sigma_upper_case_1(&e, sk),
+                sk),
+        );
+
+        add(&lhs, &rhs, sk)
+    },
+        || add(
+            &sigma_upper_case_0(&a, sk),
+            &maj(&a, &b, &c, sk), sk),
+);
+```
+
+The first closure of the outer call to join will return ```temp1```and the second ```temp2```. Inside the first closure we also call join to compute the addition of the current word, the value ```h``` and the current constant, while potentially computing in parallel the ```ch``` and ```sigma_upper_case_1``` functions and adding them. All this is done while also potentially computing ```sigma_upper_case_0``` and ```maj``` and adding them, in the second outer closure.
+
+With some changes of this type, we finally get a homomorphic sha256 function that doesn't leave unused computational resources.
 
 ## How to use sha256_fhe
 
-At a high level, a correct use of sha256_fhe would look like this, given the implementation of ```encrypt_bools``` and ```decrypt_bools```:
+At a high level, the use of sha256_fhe would look like this, given the implementation of ```encrypt_bools``` and ```decrypt_bools```:
+
 ```rust
 fn main() {
-    let (ck, sk) = gen_keys();
+    // INTRODUCE INPUT FROM STDIN
+
+    let mut input = String::new();
+    println!("Write input to hash:");
+
+    io::stdin()
+        .read_line(&mut input)
+        .expect("Failed to read line");
+
+    input = input.trim_end_matches('\n').to_string();
+
+    println!("You entered: \"{}\"", input);
 
     // CLIENT PADS DATA AND ENCRYPTS IT
 
-    let padded_input = pad_sha256_input("hello world");
+    let (ck, sk) = gen_keys();
+
+    let padded_input = pad_sha256_input(&input);
     let encrypted_input = encrypt_bools(&padded_input, &ck);
 
     // SERVER COMPUTES OVER THE ENCRYPTED PADDED DATA
 
+    println!("Computing the hash");
     let encrypted_output = sha256_fhe(encrypted_input, &sk);
 
     // CLIENT DECRYPTS THE OUTPUT
@@ -248,6 +315,12 @@ fn main() {
 }
 ```
 
-We can see that padding is executed on the client side. This has the advantage of hiding the exact length of the input to the server, who already doesn't know anything about the contents of it but may extract information from the length. 
+By using ```stdin``` we can supply the data to hash using a file instead of the command line. For example, if our file ```input.txt``` is in the same directory as the project, we can use the following shell command after building with ```cargo build --release``` (it's very important to always execute the program in release mode):
+
+```sh
+./target/release/program_name < input.txt
+```
+
+Finally see that padding is executed on the client side. This has the advantage of hiding the exact length of the input to the server, who already doesn't know anything about the contents of it but may extract information from the length. 
 
 Another option would be to perform padding on the server side. The padding function would receive the encrypted input and pad it with trivial bit encryptions. We could then integrate the padding function inside the ```sha256_fhe``` function computed by the server.
