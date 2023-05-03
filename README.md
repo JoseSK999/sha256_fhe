@@ -6,9 +6,9 @@ This program should be run with ```cargo run --release```.
 
 Make sure to add the correct dependency to the Cargo.toml file depending on your computer architecture:
 ```
-tfhe = { version = "0.1.12", features = ["boolean", "x86_64-unix"] }
+tfhe = { version = "0.2.x", features = ["boolean", "x86_64-unix"] }
 ```
 ```
-tfhe = { version = "0.1.12", features = ["boolean", "aarch64-unix"] }
+tfhe = { version = "0.2.x", features = ["boolean", "aarch64-unix"] }
 ```
 For a detailed explanation of our homomorphic sha256 implementation you can read this [tutorial](https://github.com/JoseSK999/sha256_fhe/blob/main/tutorial.md).
