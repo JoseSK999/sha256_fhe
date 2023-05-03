@@ -265,9 +265,9 @@ let (temp1, temp2) = rayon::join(
 
         add(&lhs, &rhs, sk)
     },
-        || add(
-            &sigma_upper_case_0(&a, sk),
-            &maj(&a, &b, &c, sk), sk),
+    || add(
+        &sigma_upper_case_0(&a, sk),
+        &maj(&a, &b, &c, sk), sk),
 );
 ```
 
