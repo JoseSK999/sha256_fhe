@@ -245,7 +245,7 @@ Finally, with all these sha256 operations working homomorphically, our functions
 
 ### More parallel processing
 
-If we inspect the main ```sha256``` function, we will find operations that can be performed in parallel. For instance, within the compression loop, ```temp1``` and ```temp2``` can be computed concurrently. An efficient way to parallelize computations here is using the ```rayon::join()``` function, which uses parallel processing only when CPUs are available.
+If we inspect the main ```sha256``` function, we will find operations that can be performed in parallel. For instance, within the compression loop, ```temp1``` and ```temp2``` can be computed concurrently. An efficient way to parallelize computations here is using the ```rayon::join()``` function, which uses parallel processing only when there are available CPUs.
 
 Recall that the two temporary values in the compression loop perform several additions, so we can use a nested call to ```rayon::join()``` to potentially parallelize more operations.
 
