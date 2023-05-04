@@ -9,11 +9,11 @@ pub fn add(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphe
     let propagate = xor(a, b, sk);
     let generate = and(a, b, sk);
 
-    let carry = if cfg!(feature = "ladner_fischer") {
-        ladner_fischer(&propagate, &generate, sk)
-    } else {
-        brent_kung(&propagate, &generate, sk)
-    };
+    #[cfg(feature = "ladner_fischer")]
+    let carry = ladner_fischer(&propagate, &generate, sk);
+
+    #[cfg(not(feature = "ladner_fischer"))]
+    let carry = brent_kung(&propagate, &generate, sk);
 
     let sum = xor(&propagate, &carry, sk);
 
