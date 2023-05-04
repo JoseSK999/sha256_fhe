@@ -271,7 +271,7 @@ let (temp1, temp2) = rayon::join(
 );
 ```
 
-The first closure of the outer call to join will return ```temp1```and the second ```temp2```. Inside the first closure we also call join to compute the addition of the current word, the value ```h``` and the current constant, while potentially computing in parallel the ```ch``` and ```sigma_upper_case_1``` functions and adding them. All this is done while also potentially computing ```sigma_upper_case_0``` and ```maj``` and adding them, in the second outer closure.
+The first closure of the outer call to join will return ```temp1``` and the second ```temp2```. Inside the first closure we also call join to compute the addition of the current word, the value ```h``` and the current constant, while potentially computing in parallel the ```ch``` and ```sigma_upper_case_1``` functions and adding them. All this is done while also potentially computing ```sigma_upper_case_0``` and ```maj``` and adding them, in the second outer closure.
 
 With some changes of this type, we finally get a homomorphic sha256 function that doesn't leave unused computational resources.
 
