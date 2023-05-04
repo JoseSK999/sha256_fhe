@@ -229,14 +229,14 @@ default = ["ladner_fischer"]
 ladner_fischer = []
 ```
 
-The carry signals part of the ```add``` function will look like this (skipping the implementations of the parallel prefix algorithms):
+Below is the carry signals part of the ```add``` function (skipping the implementations of the parallel prefix algorithms). We use conditional compilation attributes such that the program is compiled only with one of the two algorithms.
 
 ```rust
-let carry = if cfg!(feature = "ladner_fischer") {
-    ladner_fischer(&propagate, &generate, sk)
-} else {
-    brent_kung(&propagate, &generate, sk)
-};
+#[cfg(feature = "ladner_fischer")]
+let carry = ladner_fischer(&propagate, &generate, sk);
+
+#[cfg(not(feature = "ladner_fischer"))]
+let carry = brent_kung(&propagate, &generate, sk);
 ```
 
 For more information about parallel prefix adders you can read [this paper](https://www.iosrjournals.org/iosr-jece/papers/Vol6-Issue1/A0610106.pdf) or [this other](https://www.ijert.org/research/design-and-implementation-of-parallel-prefix-adder-for-improving-the-performance-of-carry-lookahead-adder-IJERTV4IS120608.pdf).
