@@ -1,13 +1,39 @@
 // This module contains all the operations and functions used in the sha256 function, implemented with homomorphic boolean
-// operations. We use multi-threading to speed up operations, specifically in the "and", "xor", "mux" bitwise operations,
-// used as building block for the rest of functions, and in the carry signal computation.
+// operations. Both the bitwise operations, which serve as the building blocks for other functions, and the adders employ
+// parallel processing techniques.
 
 use rayon::prelude::*;
 use tfhe::boolean::prelude::{BinaryBooleanGates, Ciphertext, ServerKey};
 
+// Implementation of a Carry Save Adder, which allows for high parallelization
+// We can chain CSAs and then add the final sum and carry sequences with a conventional adder to produce the result
+pub fn csa(a: &[Ciphertext; 32], b: &[Ciphertext; 32], c: &[Ciphertext; 32], sk: &ServerKey) -> ([Ciphertext; 32], [Ciphertext; 32]) {
+
+    let (carry, sum) = rayon::join(
+        || {
+            let ((ab, ac), bc) = rayon::join(
+                || rayon::join(
+                    || and(&a, &b, true, sk),
+                    || and(&a, &c, true, sk),
+                ),
+                || and(&b, &c, true, sk),
+            );
+
+            or(&ab, &or(&ac, &bc, sk), sk)
+        },
+        || {
+            xor(&a, &xor(&b, &c, sk), sk)
+        },
+    );
+
+    (sum, carry)
+}
+
 pub fn add(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
-    let propagate = xor(a, b, sk);
-    let generate = and(a, b, sk);
+    let (propagate, generate) = rayon::join(
+        || xor(a, b, sk),
+        || and(a, b, false, sk)
+    );
 
     #[cfg(feature = "ladner_fischer")]
     let carry = ladner_fischer(&propagate, &generate, sk);
@@ -142,7 +168,7 @@ fn ladner_fischer(propagate: &[Ciphertext; 32], generate: &[Ciphertext; 32], sk:
     carry
 }
 
-// 2 batches of 32 parallelized bool ops (64)
+// 2 (homomorphic) bitwise ops
 pub fn sigma0(x: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
     let a = rotate_right(x, 7, sk);
     let b = rotate_right(x, 18, sk);
@@ -171,7 +197,7 @@ pub fn sigma_upper_case_1(x: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 
     xor(&xor(&a, &b, sk), &c, sk)
 }
 
-// 0 bool ops
+// 0 bitwise ops
 fn rotate_right(x: &[Ciphertext; 32], n: usize, sk: &ServerKey) -> [Ciphertext; 32] {
     let mut result = trivial_bools(&[false; 32], sk);
     for i in 0..32 {
@@ -188,19 +214,19 @@ fn shift_right(x: &[Ciphertext; 32], n: usize, sk: &ServerKey) -> [Ciphertext; 3
     result
 }
 
-// 1 batch of 32 parallelized bool ops
+// 1 bitwise op
 pub fn ch(x: &[Ciphertext; 32], y: &[Ciphertext; 32], z: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
     mux(x, y, z, sk)
 }
 
-// 4 batches of 32 parallelized bool ops
+// 4 bitwise ops
 pub fn maj(x: &[Ciphertext; 32], y: &[Ciphertext; 32], z: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
-    let right = and(x, &xor(y, z, sk), sk);
-    let left = and(y, z, sk);
+    let right = and(x, &xor(y, z, sk), false, sk);
+    let left = and(y, z, false, sk);
     xor(&left, &right, sk)
 }
 
-// 32 parallelized bool ops
+// Parallelized homomorphic bitwise ops
 // Building block for most of the previous functions
 fn xor(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
     let result: Vec<Ciphertext> = (0..32)
@@ -216,8 +242,26 @@ fn xor(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertex
     array
 }
 
-fn and(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
+fn mux(condition: &[Ciphertext; 32], then: &[Ciphertext; 32], otherwise: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
     let result: Vec<Ciphertext> = (0..32)
+        .into_par_iter()
+        .map(|i| sk.mux(&condition[i], &then[i], &otherwise[i]))
+        .collect();
+
+    let mut array = trivial_bools(&[false; 32], sk);
+    for (i, elem) in result.into_iter().enumerate() {
+        array[i] = elem;
+    }
+
+    array
+}
+
+// If skip is set, we skip the AND operation in the MSB and we perform a left shift by one
+// This is useful for the Carry Save Adder as we have to discard the carry-out, and set the carry-in to 0
+fn and(a: &[Ciphertext; 32], b: &[Ciphertext; 32], skip: bool, sk: &ServerKey) -> [Ciphertext; 32] {
+    let index = if skip {1} else {0};
+
+    let result: Vec<Ciphertext> = (index..32)
         .into_par_iter()
         .map(|i| sk.and(&a[i], &b[i]))
         .collect();
@@ -230,10 +274,11 @@ fn and(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertex
     array
 }
 
-fn mux(condition: &[Ciphertext; 32], then: &[Ciphertext; 32], otherwise: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
-    let result: Vec<Ciphertext> = (0..32)
+// Bitwise OR is only used within the CSA, and we skip computing it in the LSB (carry-in is 0)
+fn or(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
+    let result: Vec<Ciphertext> = (0..31)
         .into_par_iter()
-        .map(|i| sk.mux(&condition[i], &then[i], &otherwise[i]))
+        .map(|i| sk.or(&a[i], &b[i]))
         .collect();
 
     let mut array = trivial_bools(&[false; 32], sk);
@@ -309,7 +354,11 @@ mod tests {
         let d = encrypt(&to_bool_array([0,1,0,0,0,0,1,0,1,0,0,0,1,0,1,0,0,0,1,0,1,1,1,1,1,0,0,1,1,0,0,0,]), &ck);
         let e = encrypt(&to_bool_array([0,1,1,0,1,0,0,0,0,1,1,0,0,1,0,1,0,1,1,0,1,1,0,0,0,1,1,0,1,1,0,0,]), &ck);
 
-        let output = add(&add(&add(&a, &b, &sk), &add(&c, &d, &sk), &sk), &e, &sk);
+        let (sum, carry) = csa(&c, &d, &e, &sk);
+        let (sum, carry) = csa(&b, &sum, &carry, &sk);
+        let (sum, carry) = csa(&a, &sum, &carry, &sk);
+        let output = add(&sum, &carry, &sk);
+
         let result = decrypt(&output, &ck);
         let expected = to_bool_array([0,1,0,1,1,0,1,1,1,1,0,1,1,1,0,1,0,1,0,1,1,0,0,1,1,1,0,1,0,1,0,0,]);
 
