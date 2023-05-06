@@ -245,7 +245,7 @@ Finally, with all these sha256 operations working homomorphically, our functions
 
 ### More parallel processing
 
-If we inspect the main ```sha256``` function, we will find operations that can be performed in parallel. For instance, within the compression loop, ```temp1``` and ```temp2``` can be computed concurrently. An efficient way to parallelize computations here is using the ```rayon::join()``` function, which uses parallel processing only when there are available CPUs. Recall that the two temporary values in the compression loop are the result of several additions, so we can use nested calls to ```rayon::join()``` to potentially parallelize more operations.
+If we inspect the main ```sha256_fhe``` function, we will find operations that can be performed in parallel. For instance, within the compression loop, ```temp1``` and ```temp2``` can be computed concurrently. An efficient way to parallelize computations here is using the ```rayon::join()``` function, which uses parallel processing only when there are available CPUs. Recall that the two temporary values in the compression loop are the result of several additions, so we can use nested calls to ```rayon::join()``` to potentially parallelize more operations.
 
 Another way to speed up consecutive additions would be using the Carry Save Adder, a highly parallelizable adder that takes 3 numbers and returns a sum and carry sequence. If our inputs are A, B and C, the CSA consists of the following bitwise operations:
 
