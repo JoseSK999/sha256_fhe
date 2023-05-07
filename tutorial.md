@@ -259,11 +259,18 @@ By chaining CSAs, we can input the sum and carry from a preceding stage along wi
 ```rust
 let (temp1, temp2) = rayon::join(
     || {
-        let ((sum, carry), rhs) = rayon::join(
-            || csa(&h, &w[i], &trivial_bools(&hex_to_bools(K[i]), sk), sk),
-            || add(&ch(&e, &f, &g, sk), &sigma_upper_case_1(&e, sk), sk),
+        let ((sum, carry), s1) = rayon::join(
+            || {
+                let ((sum, carry), ch) = rayon::join(
+                    || csa(&h, &w[i], &trivial_bools(&hex_to_bools(K[i]), sk), sk),
+                    || ch(&e, &f, &g, sk),
+                );
+                csa(&sum, &carry, &ch, sk)
+            },
+            || sigma_upper_case_1(&e, sk)
         );
-        let (sum, carry) = csa(&sum, &carry, &rhs, sk);
+
+        let (sum, carry) = csa(&sum, &carry, &s1, sk);
         add(&sum, &carry, sk)
     },
     || {
@@ -272,9 +279,9 @@ let (temp1, temp2) = rayon::join(
 );
 ```
 
-The first closure of the outer call to join will return ```temp1``` and the second ```temp2```. Inside the first closure we call join again to compute the sum of the current word, the value ```h``` and the current constant by using the CSA, while potentially computing in parallel the ```ch``` and ```sigma_upper_case_1``` functions and adding them with the regular adder. Once this is done we input the resulting 3 numbers to another CSA, and then we add the final sum and carry.
+The first closure of the outer call to join will return ```temp1``` and the second ```temp2```. Inside the first outer closure we call join recursively until we reach the addition of the value ```h```, the current word ```w[i]``` and the current constant ```K[i]``` by using the CSA, while potentially computing in parallel the ```ch``` function. Then we take the sum, carry and ch values and add them again using the CSA.
 
-All this is done while also potentially computing ```sigma_upper_case_0``` and ```maj``` and adding them, in the second outer closure.
+All this is done while potentially computing the ```sigma_upper_case_1``` function. Finally we input the previous sum, carry and sigma values to the CSA and perform the final addition with ```add```. Once again, this is done while potentially computing ```sigma_upper_case_0``` and ```maj``` and adding them to get ```temp2```, in the second outer closure.
 
 With some changes of this type, we finally get a homomorphic sha256 function that doesn't leave unused computational resources.
 
