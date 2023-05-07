@@ -70,11 +70,18 @@ pub fn sha256_fhe(padded_input: Vec<Ciphertext>, sk: &ServerKey) -> Vec<Cipherte
         for i in 0..64 {
             let (temp1, temp2) = rayon::join(
                 || {
-                    let ((sum, carry), rhs) = rayon::join(
-                        || csa(&h, &w[i], &trivial_bools(&hex_to_bools(K[i]), sk), sk),
-                        || add(&ch(&e, &f, &g, sk), &sigma_upper_case_1(&e, sk), sk),
+                    let ((sum, carry), s1) = rayon::join(
+                        || {
+                            let ((sum, carry), ch) = rayon::join(
+                                || csa(&h, &w[i], &trivial_bools(&hex_to_bools(K[i]), sk), sk),
+                                || ch(&e, &f, &g, sk),
+                            );
+                            csa(&sum, &carry, &ch, sk)
+                        },
+                        || sigma_upper_case_1(&e, sk)
                     );
-                    let (sum, carry) = csa(&sum, &carry, &rhs, sk);
+
+                    let (sum, carry) = csa(&sum, &carry, &s1, sk);
                     add(&sum, &carry, sk)
                 },
                 || {
