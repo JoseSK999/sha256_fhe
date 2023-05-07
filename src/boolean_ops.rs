@@ -5,34 +5,36 @@
 use rayon::prelude::*;
 use tfhe::boolean::prelude::{BinaryBooleanGates, Ciphertext, ServerKey};
 
-// Implementation of a Carry Save Adder, which allows for high parallelization
-// We can chain CSAs and then add the final sum and carry sequences with a conventional adder to produce the result
+// Implementation of a Carry Save Adder, which computes sum and carry sequences very efficiently. We then add the final
+// sum and carry values to obtain the result. CSAs are useful to speed up sequential additions
 pub fn csa(a: &[Ciphertext; 32], b: &[Ciphertext; 32], c: &[Ciphertext; 32], sk: &ServerKey) -> ([Ciphertext; 32], [Ciphertext; 32]) {
 
     let (carry, sum) = rayon::join(
         || {
-            let ((ab, ac), bc) = rayon::join(
-                || rayon::join(
-                    || and(&a, &b, true, sk),
-                    || and(&a, &c, true, sk),
-                ),
-                || and(&b, &c, true, sk),
-            );
-
-            or(&ab, &or(&ac, &bc, sk), sk)
+            maj(&a, &b, &c, sk)
         },
         || {
             xor(&a, &xor(&b, &c, sk), sk)
         },
     );
 
-    (sum, carry)
+    // perform a left shift by one to discard the carry-out and set the carry-in to 0
+    let mut shifted_carry = trivial_bools(&[false; 32], sk);
+    for (i, elem) in carry.into_iter().enumerate() {
+        if i == 0 {
+            continue;
+        } else {
+            shifted_carry[i-1] = elem;
+        }
+    }
+
+    (sum, shifted_carry)
 }
 
 pub fn add(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
     let (propagate, generate) = rayon::join(
         || xor(a, b, sk),
-        || and(a, b, false, sk)
+        || and(a, b, sk)
     );
 
     #[cfg(feature = "ladner_fischer")]
@@ -221,9 +223,12 @@ pub fn ch(x: &[Ciphertext; 32], y: &[Ciphertext; 32], z: &[Ciphertext; 32], sk: 
 
 // 4 bitwise ops
 pub fn maj(x: &[Ciphertext; 32], y: &[Ciphertext; 32], z: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
-    let right = and(x, &xor(y, z, sk), false, sk);
-    let left = and(y, z, false, sk);
-    xor(&left, &right, sk)
+
+    let (lhs, rhs) = rayon::join(
+        || and(x, &xor(y, z, sk), sk),
+        || and(y, z, sk),
+    );
+    xor(&lhs, &rhs, sk)
 }
 
 // Parallelized homomorphic bitwise ops
@@ -242,26 +247,9 @@ fn xor(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertex
     array
 }
 
-fn mux(condition: &[Ciphertext; 32], then: &[Ciphertext; 32], otherwise: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
+fn and(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
+
     let result: Vec<Ciphertext> = (0..32)
-        .into_par_iter()
-        .map(|i| sk.mux(&condition[i], &then[i], &otherwise[i]))
-        .collect();
-
-    let mut array = trivial_bools(&[false; 32], sk);
-    for (i, elem) in result.into_iter().enumerate() {
-        array[i] = elem;
-    }
-
-    array
-}
-
-// If skip is set, we skip the AND operation in the MSB and we perform a left shift by one
-// This is useful for the Carry Save Adder as we have to discard the carry-out, and set the carry-in to 0
-fn and(a: &[Ciphertext; 32], b: &[Ciphertext; 32], skip: bool, sk: &ServerKey) -> [Ciphertext; 32] {
-    let index = if skip {1} else {0};
-
-    let result: Vec<Ciphertext> = (index..32)
         .into_par_iter()
         .map(|i| sk.and(&a[i], &b[i]))
         .collect();
@@ -274,11 +262,10 @@ fn and(a: &[Ciphertext; 32], b: &[Ciphertext; 32], skip: bool, sk: &ServerKey) -
     array
 }
 
-// Bitwise OR is only used within the CSA, and we skip computing it in the LSB (carry-in is 0)
-fn or(a: &[Ciphertext; 32], b: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
-    let result: Vec<Ciphertext> = (0..31)
+fn mux(condition: &[Ciphertext; 32], then: &[Ciphertext; 32], otherwise: &[Ciphertext; 32], sk: &ServerKey) -> [Ciphertext; 32] {
+    let result: Vec<Ciphertext> = (0..32)
         .into_par_iter()
-        .map(|i| sk.or(&a[i], &b[i]))
+        .map(|i| sk.mux(&condition[i], &then[i], &otherwise[i]))
         .collect();
 
     let mut array = trivial_bools(&[false; 32], sk);
